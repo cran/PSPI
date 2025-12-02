@@ -1,7 +1,6 @@
 # PSPI
   <!-- badges: start -->
   [![R-CMD-check](https://github.com/zjg540066169/SBMtrees/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/zjg540066169/PSPI/actions/workflows/R-CMD-check.yaml)
-  [![License: GPL-2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
   [![version](https://img.shields.io/badge/version-1.1-green.svg)](https://github.com/zjg540066169/PSPI)
   ![R](https://img.shields.io/badge/language-R-blue)
   ![C++](https://img.shields.io/badge/language-C%2B%2B-green)
@@ -15,6 +14,7 @@ This package is based on `Rcpp`, `RcppArmadillo`, `RcppDist`, and `pg`, please m
 This package can be installed from R CRAN:
 ```
 install.packages("PSPI")
+library(PSPI)
 ```
 or Github:
 ```
@@ -27,7 +27,7 @@ library(PSPI)
 
 This package includes code derived from the [BART3](https://github.com/rsparapa/bnptools/tree/master) package, originally developed by Rodney Sparapani. 
 
-The original source code, licensed under the [GNU General Public License version 2 (GPL-2)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html), has been modified as follows:
+The original source code, licensed under the GNU General Public License version 2 (GPL-2), has been modified as follows:
 - We include part of the C++ code in BART3, primarily about functions about `wbart` and `cpwart`. We also modify some files to make sure our package can be successfully compiled.
 - Modifications were made by Jungang Zou, 2024.
 

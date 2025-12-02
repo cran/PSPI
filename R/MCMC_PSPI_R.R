@@ -160,7 +160,7 @@ PSPI_generalizability = function(X, Y, A, pi, X_pop, pi_pop, model, transformati
   
   if(model == 5 | model == 6){
     if(is.null(n_knots_main)){
-      n_knots_main = round(sum(A==0)^(1/3))
+      n_knots_main = round(length(A)^(1/3))
     }
     if(is.null(n_knots_inter)){
       n_knots_inter = round(sum(A==1)^(1/3))

@@ -1,7 +1,7 @@
 Package: PSPI
 Type: Package
 Title: Propensity Score Predictive Inference for Generalizability
-Version: 1.1
+Version: 1.2
 Date: 2025-11-15
 Author: Jungang Zou [aut, cre],
   Qixuan Chen [aut],
@@ -25,6 +25,6 @@ RoxygenNote: 7.3.2
 SystemRequirements: GNU make
 Suggests: knitr, rmarkdown, mitml
 NeedsCompilation: yes
-Packaged: 2025-11-24 21:25:55 UTC; jz3183
+Packaged: 2025-12-01 19:21:26 UTC; jz3183
 Repository: CRAN
-Date/Publication: 2025-12-01 13:50:05 UTC
+Date/Publication: 2025-12-02 07:50:21 UTC
