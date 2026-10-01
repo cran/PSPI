@@ -4,16 +4,16 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 #endif
 
+#ifndef NS_H_
+#define NS_H_
+#include "NS_ridge.h"
+#endif
+
+
 #ifndef CBART_H_
 #define CBART_H_
 #include "BARTforPSPI.h"
 #endif
-
-#ifndef NS_R_H_
-#define NS_R_H_
-#include "NS_ridge.h"
-#endif
-
 
 #ifndef PG_H_
 #define PG_H_
@@ -21,14 +21,11 @@
 // [[Rcpp::depends(RcppArmadillo, pg)]]
 #endif
 
-
 #ifndef RCPPDIST_H_
 #define RCPPDIST_H_
 #include <RcppDist.h>
 // [[Rcpp::depends(RcppArmadillo, RcppDist)]]
 #endif
-
-
 
 
 #ifndef RCPP_H_
@@ -40,77 +37,93 @@
 using namespace Rcpp;
 
 
-// SplineBART. The BART_s / NS non-identifiability is resolved by dropping the
-// NS intercept; BART_s is not centered.
-class PSPI_SplineBART: public BARTforPSPI{
+// MSplineBART (DSplineBART). The BART / NS non-identifiability is resolved by
+// dropping the NS intercept in both the main-effect spline (ns[0]) and each
+// interaction spline (ns[j], j>=1); BART components are not centered.
+class PSPI_MSplineBART: public BARTforPSPI{
 public:
-    PSPI_SplineBART(NumericMatrix X_, NumericVector Y_,  bool binary_,  IntegerVector Z_, NumericMatrix pi_, NumericMatrix X_test_, IntegerVector n_knots, IntegerVector order, long ntrees_s = 200, bool dart = false, bool aug = false) : BARTforPSPI(X_, Y_, binary_, Z_, pi_, X_test_, ntrees_s){
+  PSPI_MSplineBART(NumericMatrix X_, NumericVector Y_,  bool binary_,  IntegerVector Z_, NumericMatrix pi_, NumericMatrix X_test_, IntegerVector n_knots, IntegerVector order, long ntrees_s = 200, bool dart = false, bool aug = false) : BARTforPSPI(X_, Y_, binary_, Z_, pi_, X_test_, ntrees_s){
+    X_Z.push_back(X);
+    NumericMatrix X_j = X_Z[0];
+    bart.push_back(new bart_model(X_j, Y, dart, aug, 100L, false, false, false, ntrees_s));
+    bart[0]->update(50, 50, 1, false, 10L);
+    sigma = bart[0]->get_sigma();
+    NumericVector cbart_pre = colMeans(bart[0]->predict(X_j));
+    // NO centering
 
-      X_Z.push_back(cbind(X, pi(_, 0)));
-      NumericMatrix X_j = X_Z[0];
-      bart.push_back(new bart_model(X_j, Y, dart, aug, 100L, false, false, false, ntrees_s));
-      bart[0]->update(50, 50, 1, false, 10L);
-      sigma = bart[0]->get_sigma();
+    NumericVector pi_j = pi(_, 0);
+    // NS with intercept = FALSE
+    ns.push_back(new NS_R(pi_j, Y - cbart_pre, n_knots[0], sigma, order[0], 1.0, 1.0, 1.0, 1.0, false, false));
+    ns[0]->update(sigma);
+    NumericVector clm_pi_pre = ns[0]->get_ns_outcome();
+    pi_ns_pre.push_back(clm_pi_pre);
+    bart_pre = cbart_pre + clm_pi_pre;
 
-      bart_pre = colMeans(bart[0]->predict(X_j));
-      for(int j = 1; j < J; ++j){
-        LogicalVector Z_j = (Z == j);
-        Z_Z.push_back(Z_j);
-        NumericMatrix X_j = sliceRows(X, Z_j);
-        NumericVector Y_j = Y[Z_j] - bart_pre[Z_j];
-        NumericVector pi_j = pi(_, j);
-        pi_j = pi_j[Z_j];
-        X_Z.push_back(X_j);
-        pi_Z.push_back(pi_j);
+    for(int j = 1; j < J; ++j){
+      LogicalVector Z_j = (Z == j);
+      Z_Z.push_back(Z_j);
+      NumericMatrix X_j = sliceRows(X, Z_j);
+      NumericVector Y_j = Y[Z_j] - bart_pre[Z_j];
+      NumericVector pi_j = pi(_, j);
+      pi_j = pi_j[Z_j];
+      X_Z.push_back(X_j);
+      pi_Z.push_back(pi_j);
 
-        bart.push_back(new bart_model(X_j, Y_j, dart, aug, 100L, false, false, false, ntrees_s));
-        bart[j]->update(sigma, 50, 50, 1, false, 10L);
-        NumericVector cbart_pre = colMeans(bart[j]->predict(X_j));
-        // NO centering: BART_s is free to have any mean
+      bart.push_back(new bart_model(X_j, Y_j, dart, aug, 100L, false, false, false, ntrees_s));
+      bart[j]->update(sigma, 50, 50, 1, false, 10L);
+      NumericVector cbart_pre = colMeans(bart[j]->predict(X_j));
+      // NO centering
 
-        // NS with intercept = FALSE (last argument). Identifiability comes
-        // from dropping NS intercept rather than centering BART_s.
-        ns.push_back(new NS_R(pi_j, Y_j - cbart_pre, n_knots[j-1], sigma, order[j-1], 1.0, 1.0, 1.0, 1.0, false, false));
-        ns[j-1]->update(sigma);
-        NumericVector clm_pi_pre = ns[j-1]->get_ns_outcome();
-        pi_ns_pre.push_back(clm_pi_pre);
-      }
-      Z_cbart = NumericVector(Y.length());
-      this->update_Z_cbart();
-      if(binary){
-        sigma = 1;
-        for(int i = 0; i < n; ++i){
-          if(Y_[i] == 0){
-            NumericVector mean_y = rtruncnorm(1, bart_pre[i] + Z_cbart[i], sigma, R_NegInf, 0);
-            Y[i] = mean_y[0];
-          }else{
-            NumericVector mean_y = rtruncnorm(1, bart_pre[i] + Z_cbart[i], sigma, 0, R_PosInf);
-            Y[i] = mean_y[0];
-          }
+      // NS with intercept = FALSE
+      ns.push_back(new NS_R(pi_j, Y_j - cbart_pre, n_knots[j], sigma, order[j], 1.0, 1.0, 1.0, 1.0, false, false));
+      ns[j]->update(sigma);
+      NumericVector clm_pi_pre = ns[j]->get_ns_outcome();
+      pi_ns_pre.push_back(clm_pi_pre);
+    }
+    Z_cbart = NumericVector(Y.length());
+    this->update_Z_cbart();
+    if(binary){
+      sigma = 1;
+      for(int i = 0; i < n; ++i){
+        if(Y_[i] == 0){
+          NumericVector mean_y = rtruncnorm(1, bart_pre[i] + Z_cbart[i], sigma, R_NegInf, 0);
+          Y[i] = mean_y[0];
+        }else{
+          NumericVector mean_y = rtruncnorm(1, bart_pre[i] + Z_cbart[i], sigma, 0, R_PosInf);
+          Y[i] = mean_y[0];
         }
       }
+    }
   };
 
 
   void update_Z_cbart(){
     for(int j = 1; j < J; ++j){
-      LogicalVector Z_j = Z_Z[j-1];
+      LogicalVector Z_j = Z_Z[j - 1];
       NumericMatrix X_j = X_Z[j];
-      NumericVector r = colMeans(bart[j]->predict(X_j)) + as<NumericVector>(pi_ns_pre[j-1]);
+      NumericVector r = colMeans(bart[j]->predict(X_j)) + as<NumericVector>(pi_ns_pre[j]);
       Z_cbart[Z_j] = r;
     }
   }
 
   void update(bool verbose = false) override{
     NumericMatrix X_j = X_Z[0];
-    bart[0]->set_Y(Y - Z_cbart);
+    bart[0]->set_Y(Y - Z_cbart - as<NumericVector>(pi_ns_pre[0]));
     bart[0]->update(sigma, w, 0, 1, 1, false, 10L);
-    bart_pre = colMeans(bart[0]->predict(X_j));
+    NumericVector cbart_pre = colMeans(bart[0]->predict(X_j));
+    // NO centering
+
+    NumericVector Y_j = Y - Z_cbart - cbart_pre;
+    ns[0]->set_Y(Y_j);
+    ns[0]->update(sigma);
+    NumericVector clm_pi_pre = ns[0]->get_ns_outcome();
+    pi_ns_pre[0] = clm_pi_pre;
+    bart_pre = cbart_pre + clm_pi_pre;
 
     if(J > 1){
       for(int j = 1; j < J; ++j){
         LogicalVector Z_j = Z_Z[j-1];
-        NumericVector cbart_pi_pre = pi_ns_pre[j-1];
+        NumericVector cbart_pi_pre = pi_ns_pre[j];
         NumericVector Y_j = Y[Z_j] - bart_pre[Z_j] - cbart_pi_pre;
         NumericVector w_Z = w[Z_j];
         bart[j]->set_Y(Y_j);
@@ -120,9 +133,9 @@ public:
         // NO centering
 
         Y_j = Y[Z_j] - bart_pre[Z_j] - cbart_pre;
-        ns[j - 1]->set_Y(Y_j);
-        ns[j - 1]->update(sigma);
-        pi_ns_pre[j-1] = ns[j-1]->get_ns_outcome();
+        ns[j]->set_Y(Y_j);
+        ns[j]->update(sigma);
+        pi_ns_pre[j] = ns[j]->get_ns_outcome();
       }
       this->update_Z_cbart();
     }
@@ -153,16 +166,19 @@ public:
     NumericMatrix outcome(N, J);
     NumericMatrix inter_model(N, J - 1);
     NumericMatrix outcome_hidden(N, J);
-    NumericMatrix spline_test(N, J > 1 ? J - 1 : 1);
+    // J splines total: col 0 is main-effect spline h, col j (j>=1) is interaction s_j
+    NumericMatrix spline_test(N, J);
 
     if(J > 1){
-      outcome(_, 0) = colMeans(bart[0]->predict(cbind(X_test, pi0_test)));
+      NumericVector sp0 = ns[0]->predict(pi0_test);
+      spline_test(_, 0) = sp0;
+      outcome(_, 0) = colMeans(bart[0]->predict(X_test)) + sp0;  // no centering
       for(int j = 1; j < J; ++j){
         NumericVector pi_j = pi_test(_, j);
-        NumericVector sp = ns[j - 1]->predict(pi_j);
-        spline_test(_, j - 1) = sp;
-        inter_model(_, j - 1) = colMeans(bart[j]->predict(X_test));
-        inter_model(_, j - 1) = inter_model(_, j - 1) + sp;
+        NumericVector spj = ns[j]->predict(pi_j);
+        spline_test(_, j) = spj;
+        inter_model(_, j - 1) = colMeans(bart[j]->predict(X_test));  // no centering
+        inter_model(_, j - 1) = inter_model(_, j - 1) + spj;
         outcome(_, j) = outcome(_, 0) + inter_model(_, j - 1);
       }
     }
@@ -185,11 +201,13 @@ public:
   };
 
   List get_posterior() override{
-    NumericMatrix spline_train(n, J > 1 ? J - 1 : 1);
+    // J splines: col 0 = main-effect (all trial), cols 1..J-1 = interaction (arm j only, NA otherwise)
+    NumericMatrix spline_train(n, J);
+    spline_train(_, 0) = as<NumericVector>(pi_ns_pre[0]);
     if(J > 1){
       for(int j = 1; j < J; ++j){
         LogicalVector Z_j = Z_Z[j-1];
-        NumericVector sp = pi_ns_pre[j-1];
+        NumericVector sp = pi_ns_pre[j];
         NumericVector col(n);
         int k = 0;
         for(int i = 0; i < n; ++i){
@@ -199,7 +217,7 @@ public:
             col[i] = NA_REAL;
           }
         }
-        spline_train(_, j - 1) = col;
+        spline_train(_, j) = col;
       }
     }
     return List::create(
@@ -220,7 +238,7 @@ public:
   }
 
   NumericVector get_gamma(){
-    NumericVector gamma(J-1);
+    NumericVector gamma(J);
     for(int j = 0 ; j < (int)ns.size(); ++j){
       gamma[j] = ns[j]->get_gamma();
     }
@@ -228,26 +246,27 @@ public:
   }
 
   void startdart() override{
-    for(int j = 0; j < J; ++j){
+    for(int j = 0; j < (int)bart.size(); ++j){
       bart[j]->startdart();
     }
   }
 
   void set_pi(NumericMatrix pi_) override {
     pi = clone(pi_);
-    X_Z[0] = cbind(X, pi(_, 0));
+    pi_Z[0] = pi(_, 0);
     for(int j = 1; j < J; ++j){
       LogicalVector Z_j = Z_Z[j-1];
       NumericVector pi_j = pi(_, j);
       pi_j = pi_j[Z_j];
-      pi_Z[j - 1] = pi_j;
+      pi_Z[j] = pi_j;
     }
   }
 
   // Serialization: no bart_pre_mean field needed
   List get_serialized_state() override {
     List bart_states;
-    for(int j = 0; j < J; ++j)
+    int nb = (J > 1) ? J : 1;
+    for(int j = 0; j < nb; ++j)
       bart_states.push_back(deep_copy_tree_object(bart[j]));
     List spline_theta;
     for(int j = 0; j < (int)ns.size(); ++j)
@@ -267,7 +286,6 @@ public:
     }
     return info;
   }
-
 
 private:
 

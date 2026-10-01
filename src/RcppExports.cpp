@@ -12,33 +12,90 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // MCMC_PSPI_generalizability
-List MCMC_PSPI_generalizability(NumericMatrix X, NumericVector Y, NumericVector Z, NumericVector pi, NumericMatrix X_test, NumericVector pi_test, int model, long nburn, long npost, long n_knots_main, long n_knots_inter, long order_main, long order_inter, int ntrees_s, bool verbose);
-RcppExport SEXP _PSPI_MCMC_PSPI_generalizability(SEXP XSEXP, SEXP YSEXP, SEXP ZSEXP, SEXP piSEXP, SEXP X_testSEXP, SEXP pi_testSEXP, SEXP modelSEXP, SEXP nburnSEXP, SEXP npostSEXP, SEXP n_knots_mainSEXP, SEXP n_knots_interSEXP, SEXP order_mainSEXP, SEXP order_interSEXP, SEXP ntrees_sSEXP, SEXP verboseSEXP) {
+List MCMC_PSPI_generalizability(NumericMatrix X, NumericVector Y, bool binary, IntegerVector Z, NumericMatrix pi, NumericMatrix X_test, NumericMatrix pi_test, int model, long nburn, long npost, IntegerVector n_knots, IntegerVector order, int ntrees_s, bool verbose, bool dart, bool aug);
+RcppExport SEXP _PSPI_MCMC_PSPI_generalizability(SEXP XSEXP, SEXP YSEXP, SEXP binarySEXP, SEXP ZSEXP, SEXP piSEXP, SEXP X_testSEXP, SEXP pi_testSEXP, SEXP modelSEXP, SEXP nburnSEXP, SEXP npostSEXP, SEXP n_knotsSEXP, SEXP orderSEXP, SEXP ntrees_sSEXP, SEXP verboseSEXP, SEXP dartSEXP, SEXP augSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericMatrix >::type X(XSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type Y(YSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type Z(ZSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type pi(piSEXP);
+    Rcpp::traits::input_parameter< bool >::type binary(binarySEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type Z(ZSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pi(piSEXP);
     Rcpp::traits::input_parameter< NumericMatrix >::type X_test(X_testSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type pi_test(pi_testSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pi_test(pi_testSEXP);
     Rcpp::traits::input_parameter< int >::type model(modelSEXP);
     Rcpp::traits::input_parameter< long >::type nburn(nburnSEXP);
     Rcpp::traits::input_parameter< long >::type npost(npostSEXP);
-    Rcpp::traits::input_parameter< long >::type n_knots_main(n_knots_mainSEXP);
-    Rcpp::traits::input_parameter< long >::type n_knots_inter(n_knots_interSEXP);
-    Rcpp::traits::input_parameter< long >::type order_main(order_mainSEXP);
-    Rcpp::traits::input_parameter< long >::type order_inter(order_interSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type n_knots(n_knotsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type order(orderSEXP);
     Rcpp::traits::input_parameter< int >::type ntrees_s(ntrees_sSEXP);
     Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
-    rcpp_result_gen = Rcpp::wrap(MCMC_PSPI_generalizability(X, Y, Z, pi, X_test, pi_test, model, nburn, npost, n_knots_main, n_knots_inter, order_main, order_inter, ntrees_s, verbose));
+    Rcpp::traits::input_parameter< bool >::type dart(dartSEXP);
+    Rcpp::traits::input_parameter< bool >::type aug(augSEXP);
+    rcpp_result_gen = Rcpp::wrap(MCMC_PSPI_generalizability(X, Y, binary, Z, pi, X_test, pi_test, model, nburn, npost, n_knots, order, ntrees_s, verbose, dart, aug));
+    return rcpp_result_gen;
+END_RCPP
+}
+// MCMC_PSPI_fit
+List MCMC_PSPI_fit(NumericMatrix X, NumericVector Y, bool binary, IntegerVector Z, NumericMatrix pi, int model, long nburn, long npost, IntegerVector n_knots, IntegerVector order, int ntrees_s, bool verbose, bool dart, bool aug);
+RcppExport SEXP _PSPI_MCMC_PSPI_fit(SEXP XSEXP, SEXP YSEXP, SEXP binarySEXP, SEXP ZSEXP, SEXP piSEXP, SEXP modelSEXP, SEXP nburnSEXP, SEXP npostSEXP, SEXP n_knotsSEXP, SEXP orderSEXP, SEXP ntrees_sSEXP, SEXP verboseSEXP, SEXP dartSEXP, SEXP augSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type X(XSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Y(YSEXP);
+    Rcpp::traits::input_parameter< bool >::type binary(binarySEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type Z(ZSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pi(piSEXP);
+    Rcpp::traits::input_parameter< int >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< long >::type nburn(nburnSEXP);
+    Rcpp::traits::input_parameter< long >::type npost(npostSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type n_knots(n_knotsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type order(orderSEXP);
+    Rcpp::traits::input_parameter< int >::type ntrees_s(ntrees_sSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    Rcpp::traits::input_parameter< bool >::type dart(dartSEXP);
+    Rcpp::traits::input_parameter< bool >::type aug(augSEXP);
+    rcpp_result_gen = Rcpp::wrap(MCMC_PSPI_fit(X, Y, binary, Z, pi, model, nburn, npost, n_knots, order, ntrees_s, verbose, dart, aug));
+    return rcpp_result_gen;
+END_RCPP
+}
+// MCMC_PSPI_predict
+List MCMC_PSPI_predict(List fit, NumericMatrix X_pop, NumericMatrix pi_pop, bool verbose);
+RcppExport SEXP _PSPI_MCMC_PSPI_predict(SEXP fitSEXP, SEXP X_popSEXP, SEXP pi_popSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type fit(fitSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type X_pop(X_popSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pi_pop(pi_popSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(MCMC_PSPI_predict(fit, X_pop, pi_pop, verbose));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bart_train
+SEXP bart_train(NumericMatrix X, NumericVector Y, long nburn, long npost, bool verbose);
+RcppExport SEXP _PSPI_bart_train(SEXP XSEXP, SEXP YSEXP, SEXP nburnSEXP, SEXP npostSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type X(XSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Y(YSEXP);
+    Rcpp::traits::input_parameter< long >::type nburn(nburnSEXP);
+    Rcpp::traits::input_parameter< long >::type npost(npostSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    rcpp_result_gen = Rcpp::wrap(bart_train(X, Y, nburn, npost, verbose));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_PSPI_MCMC_PSPI_generalizability", (DL_FUNC) &_PSPI_MCMC_PSPI_generalizability, 15},
+    {"_PSPI_MCMC_PSPI_generalizability", (DL_FUNC) &_PSPI_MCMC_PSPI_generalizability, 16},
+    {"_PSPI_MCMC_PSPI_fit", (DL_FUNC) &_PSPI_MCMC_PSPI_fit, 14},
+    {"_PSPI_MCMC_PSPI_predict", (DL_FUNC) &_PSPI_MCMC_PSPI_predict, 4},
+    {"_PSPI_bart_train", (DL_FUNC) &_PSPI_bart_train, 5},
     {NULL, NULL, 0}
 };
 

@@ -1,5 +1,15 @@
 # NEWS for PSPI
 
+## Version 1.4 (2026-09-30) - Persistence and Transportability
+- Add support for persistent model fitting (`PSPI_fit()`, `PSPI_predict()`).
+- SplineBART and DSplineBART now resolve the BART/spline non-identifiability by dropping the spline intercept instead of centering BART; the previous centered implementations are removed.
+- `"DSplineBART"` is accepted as a model name; `"MSplineBART"` remains an alias.
+- `sim_trans()` and `sim_generalizability()`: participation model of the nonlinear scenario updated.
+- Title updated to cover transportability.
+
+## Version 1.3 (2026-01-21) - Binary Outcomes
+Add support for binary outcomes.
+
 ## Version 1.2 (2025-11-1) - Bug Fixed
 Fix the bug in the initialization of BART.
 

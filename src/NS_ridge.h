@@ -9,9 +9,8 @@
 #include <Rcpp.h>
 #endif
 
-#ifndef NS_BASIS_H_
-#define NS_BASIS_H_
-#include "NS_basis.h"
+#ifndef NS_H_
+#define NS_H_
 #include "NS.h"
 #endif
 
@@ -26,176 +25,241 @@
 using namespace Rcpp;
 using namespace arma;
 
-
-
-class NS_R: public NS{
+class NS_R: public NS {
 public:
-  NS_R(){};
+  NS_R() {}
   
-  NS_R(NumericVector X, NumericVector y, long K, double sigma, int order = 3, double alpha_0 = 1, double beta_0 = 1, double alpha_k = 1, double beta_k = 1, bool local = false) : NS(X, y, K, sigma, order){
+  NS_R(NumericVector X,
+       NumericVector y,
+       long K,
+       double sigma,
+       int order = 3,
+       double alpha_0 = 1.0,
+       double beta_0  = 1.0,
+       double alpha_k = 1.0,
+       double beta_k  = 1.0,
+       bool local = false,
+       bool intercept = false)
+    : NS(X, y, K, sigma, order, intercept)
+  {
     this->alpha_0 = alpha_0;
-    this->beta_0 = beta_0;
+    this->beta_0  = beta_0;
     this->alpha_k = alpha_k;
-    this->beta_k = beta_k;
-    this->local = local;
-
-    if(K > 2){
-      gamma = 1;//sqrt(rinvgamma(alpha_0, beta_0));
+    this->beta_k  = beta_k;
+    this->local   = local;
+    
+    const arma::uword d = ns_basis.n_cols;
+    
+    if(d > 0){
+      gamma = 1.0;
+      
       if(local){
-        for(int k = 2; k <= K-1; ++k){
-          lambda_k.insert_rows(lambda_k.n_rows, 1);
-          lambda_k(lambda_k.n_rows - 1) = sqrt(rinvgamma(alpha_k, beta_k));
+        lambda_k.set_size(d);
+        for(arma::uword k = 0; k < d; ++k){
+          lambda_k[k] = std::sqrt(rinvgamma(this->alpha_k, this->beta_k));
         }
       }
     }
-    update_outcome();
-  };
-
-  
-  
-  
-  void update(){
-    if(K > 2){
-      lr_coefficient = update_beta(lr_basis, this->y - ns_part_outcome, this->sigma);
-    }else{
-      lr_coefficient = update_beta(lr_basis, this->y, this->sigma);
-    }
-    lr_outcome = lr_basis * lr_coefficient;
-    //Rcout << "after lr" << std::endl;
-    if(K > 2){
-      if(local){
-        arma::mat Lambda = arma::diagmat(pow(lambda_k, 2)) * pow(gamma, 2);
-        arma::mat theta_var = arma::inv_sympd(arma::inv_sympd(Lambda) + 1 / pow(sigma, 2) * ns_basis.t() * ns_basis);
-        arma::vec theta_mean = arma::inv_sympd(pow(sigma, 2) * arma::inv_sympd(Lambda) + ns_basis.t() * ns_basis) * ns_basis.t() * (this->y - lr_outcome);
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
-      }else{
-        arma::mat theta_var = arma::inv_sympd(1 / pow(gamma, 2) * arma::eye<arma::mat>(K - 2, K - 2) + 1 / pow(this->sigma, 2) * ns_basis.t() * ns_basis);
-        arma::vec theta_mean = arma::inv_sympd(pow(this->sigma, 2) / pow(gamma, 2) * arma::eye<arma::mat>(K - 2, K - 2) + ns_basis.t() * ns_basis) * ns_basis.t() * (this->y - lr_outcome);
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
-      }
-      
-      ns_part_outcome = ns_basis * ns_coefficient;
-      ns_outcome = lr_outcome + ns_part_outcome;
-      
-      if(local){
-        for(int k = 0; k < K-2; ++k){
-          lambda_k[k] = sqrt(rinvgamma(alpha_k + 0.5, beta_k + 0.5 * pow(ns_coefficient[k] / gamma, 2)));
-        }
-        gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient / lambda_k, ns_coefficient / lambda_k)));
-      }else{
-        gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient, ns_coefficient)));
-      } 
-    }
+    
+    refresh_outcome_cache();
   }
   
-  
-  void update(double sigma){
-    //Rcout << "begin" << std::endl;
+  // Joint Gibbs update of (lr_coefficient, ns_coefficient).
+  // Samples the full coefficient vector from its joint conditional posterior
+  // in one step, eliminating slow mixing along ridge-like posteriors that
+  // arise when the linear and NS basis columns are posterior-correlated.
+  //
+  // Model:  y = [lr_basis | ns_basis] * beta + N(0, sigma^2 I)
+  // Prior:  flat on lr_coefficient (dims 0..d_lr-1)
+  //         N(0, gamma^2) on ns_coefficient (or N(0, (gamma*lambda_k)^2) if local)
+  //
+  // Equivalent stationary distribution to the old blocked Gibbs, but
+  // dramatically faster mixing when (lr, ns) coefficients are correlated.
+  void update() override {
+    const arma::uword d_lr = lr_basis.n_cols;
+    const arma::uword d_ns = ns_basis.n_cols;
+
+    if(d_ns == 0){
+      // No NS basis: fall back to flat-prior linear regression on lr_basis.
+      lr_coefficient = update_beta(lr_basis, this->y, this->sigma);
+      ns_outcome = lr_basis * lr_coefficient;
+      return;
+    }
+
+    // Stacked design matrix [lr_basis | ns_basis]
+    arma::mat X = arma::join_rows(lr_basis, ns_basis);
+
+    // Posterior precision: (1/sigma^2) X'X + prior precision.
+    // Prior precision is 0 for lr dims (flat prior), 1/gamma^2 (or local) for ns dims.
+    const double inv_sig2 = 1.0 / (this->sigma * this->sigma);
+    arma::mat Prec = inv_sig2 * (X.t() * X);
+
+    if(local && lambda_k.n_elem == d_ns){
+      for(arma::uword k = 0; k < d_ns; ++k){
+        const double prec_k = 1.0 / std::pow(gamma * lambda_k[k], 2.0);
+        Prec(d_lr + k, d_lr + k) += prec_k;
+      }
+    } else {
+      const double prec_ns = 1.0 / (gamma * gamma);
+      for(arma::uword k = 0; k < d_ns; ++k){
+        Prec(d_lr + k, d_lr + k) += prec_ns;
+      }
+    }
+
+    // Joint draw from multivariate normal
+    arma::mat Var = arma::inv_sympd(Prec);
+    arma::vec Mean = Var * (inv_sig2 * (X.t() * this->y));
+    arma::vec beta_full = arma::vectorise(rmvnorm(1, Mean, Var));
+
+    lr_coefficient = beta_full.head(d_lr);
+    ns_coefficient = beta_full.tail(d_ns);
+
+    // Update shrinkage hyperparameters (gamma, lambda_k)
+    update_shrinkage();
+
+    // Cache ns_outcome = X * beta (stored for downstream access)
+    ns_outcome = X * beta_full;
+  }
+
+  void update(double sigma) override {
     this->sigma = sigma;
-    if(K > 2){
-      //Rcout << 456 ;
-      lr_coefficient = update_beta(lr_basis, this->y - ns_part_outcome, this->sigma);
-      //Rcout << 456 ;
-    }else{
-      lr_coefficient = update_beta(lr_basis, this->y, this->sigma);
-    }
-    lr_outcome = lr_basis * lr_coefficient;
-    //Rcout << "after lr" << std::endl;
-    if(K > 2){
-      if(local){
-        arma::mat Lambda = arma::diagmat(pow(lambda_k, 2)) * pow(gamma, 2);
-        arma::mat theta_var = arma::inv_sympd(arma::inv_sympd(Lambda) + 1 / pow(sigma, 2) * ns_basis.t() * ns_basis);
-        arma::vec theta_mean = arma::inv_sympd(pow(sigma, 2) * arma::inv_sympd(Lambda) + ns_basis.t() * ns_basis) * ns_basis.t() * (this->y - lr_outcome);
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
-      }else{
-        
-        arma::mat theta_var = arma::inv_sympd(1 / pow(gamma, 2) * arma::eye<arma::mat>(K - 2, K - 2) + 1 / pow(this->sigma, 2) * ns_basis.t() * ns_basis);
-        arma::vec theta_mean = arma::inv_sympd(pow(this->sigma, 2) / pow(gamma, 2) * arma::eye<arma::mat>(K - 2, K - 2) + ns_basis.t() * ns_basis) * ns_basis.t() * (this->y - lr_outcome);
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
-        
-      }
-      
-      ns_part_outcome = ns_basis * ns_coefficient;
-      ns_outcome = lr_outcome + ns_part_outcome;
-      
-      if(local){
-        for(int k = 0; k < K-2; ++k){
-          lambda_k[k] = sqrt(rinvgamma(alpha_k + 0.5, beta_k + 0.5 * pow(ns_coefficient[k] / gamma, 2)));
-        }
-          gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient / lambda_k, ns_coefficient / lambda_k)));
-      }else{
-          gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient, ns_coefficient)));
-      } 
-    }
+    update();
   }
-  
 
-  void update(NumericVector sigma){
-    sigma = as<arma::vec>(sigma);
-    if(K > 2){
-      lr_coefficient = update_beta(lr_basis, this->y - ns_part_outcome, sigma);
-    }else{
-      lr_coefficient = update_beta(lr_basis, this->y, sigma);
+  // Heteroskedastic variant: y_i ~ N(X_i beta, sigma_i^2)
+  void update(NumericVector sigma) override {
+    const arma::uword d_lr = lr_basis.n_cols;
+    const arma::uword d_ns = ns_basis.n_cols;
+
+    arma::vec sigma_vec = as<arma::vec>(sigma);
+    arma::vec w = 1.0 / (sigma_vec % sigma_vec);
+
+    if(d_ns == 0){
+      // Heteroskedastic flat-prior regression on lr_basis only.
+      arma::mat Prec = lr_basis.t() * arma::diagmat(w) * lr_basis;
+      arma::mat Var  = arma::inv_sympd(Prec);
+      arma::vec Mean = Var * (lr_basis.t() * (w % this->y));
+      lr_coefficient = arma::vectorise(rmvnorm(1, Mean, Var));
+      ns_outcome = lr_basis * lr_coefficient;
+      return;
     }
-    lr_outcome = lr_basis * lr_coefficient;
-    //Rcout << "after lr" << std::endl;
-    if(K > 2){
-      if(local){
-        arma::mat Lambda = arma::diagmat(pow(lambda_k, 2)) * pow(gamma, 2);
-        arma::mat theta_var = arma::inv_sympd(arma::inv_sympd(Lambda) + ns_basis.t() * inv_Sigma * ns_basis);
-        arma::vec theta_mean = theta_var * (ns_basis.t() * inv_Sigma * (this->y - lr_outcome));
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
-      }else{
-        arma::mat theta_var = arma::inv_sympd(1 / pow(gamma, 2) * arma::eye<arma::mat>(K - 2, K - 2) + ns_basis.t() * inv_Sigma * ns_basis);
-        arma::vec theta_mean = theta_var * (ns_basis.t() * inv_Sigma * (this->y - lr_outcome));
-        ns_coefficient = arma::vectorise(rmvnorm(1, theta_mean, theta_var));
+
+    arma::mat X = arma::join_rows(lr_basis, ns_basis);
+    arma::mat Prec = X.t() * arma::diagmat(w) * X;
+
+    if(local && lambda_k.n_elem == d_ns){
+      for(arma::uword k = 0; k < d_ns; ++k){
+        const double prec_k = 1.0 / std::pow(gamma * lambda_k[k], 2.0);
+        Prec(d_lr + k, d_lr + k) += prec_k;
       }
-      
-      ns_part_outcome = ns_basis * ns_coefficient;
-      ns_outcome = lr_outcome + ns_part_outcome;
-      
-      if(local){
-        for(int k = 0; k < K-2; ++k){
-          lambda_k[k] = sqrt(rinvgamma(alpha_k + 0.5, beta_k + 0.5 * pow(ns_coefficient[k] / gamma, 2)));
-        }
-        gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient / lambda_k, ns_coefficient / lambda_k)));
-      }else{
-        gamma = sqrt(rinvgamma(alpha_0 + (K-2.0) / 2.0, beta_0 + 0.5 * arma::dot(ns_coefficient, ns_coefficient)));
-      } 
+    } else {
+      const double prec_ns = 1.0 / (gamma * gamma);
+      for(arma::uword k = 0; k < d_ns; ++k){
+        Prec(d_lr + k, d_lr + k) += prec_ns;
+      }
     }
-  }  
-  
 
+    arma::mat Var = arma::inv_sympd(Prec);
+    arma::vec Mean = Var * (X.t() * (w % this->y));
+    arma::vec beta_full = arma::vectorise(rmvnorm(1, Mean, Var));
+
+    lr_coefficient = beta_full.head(d_lr);
+    ns_coefficient = beta_full.tail(d_ns);
+
+    update_shrinkage();
+
+    ns_outcome = X * beta_full;
+  }
   
 protected:
-
-  double alpha_0;
-  double beta_0;
-  double alpha_k;
-  double beta_k;
+  void refresh_outcome_cache(){
+    const arma::uword d = ns_basis.n_cols;
+    arma::vec lr_fit = lr_basis * lr_coefficient;
+    
+    if(d > 0 && ns_coefficient.n_elem == d){
+      ns_outcome = lr_fit + ns_basis * ns_coefficient;
+    }else{
+      ns_outcome = lr_fit;
+    }
+  }
+  
+  void sample_spline_homoskedastic(double sigma, const arma::vec& lr_fit){
+    const arma::uword d = ns_basis.n_cols;
+    if(d == 0) return;
+    
+    arma::vec r = this->y - lr_fit;
+    
+    arma::mat XtX = ns_basis.t() * ns_basis;
+    arma::vec Xtr = ns_basis.t() * r;
+    
+    arma::mat Prec = (1.0 / (sigma * sigma)) * XtX;
+    
+    if(local){
+      arma::vec prior_prec = 1.0 / arma::square(gamma * lambda_k);
+      Prec.diag() += prior_prec;
+    }else{
+      Prec.diag() += (1.0 / (gamma * gamma));
+    }
+    
+    arma::mat Var = arma::inv_sympd(Prec);
+    arma::vec Mean = Var * ((1.0 / (sigma * sigma)) * Xtr);
+    
+    ns_coefficient = arma::vectorise(rmvnorm(1, Mean, Var));
+  }
+  
+  void sample_spline_heteroskedastic(const arma::vec& lr_fit){
+    const arma::uword d = ns_basis.n_cols;
+    if(d == 0) return;
+    
+    arma::vec r = this->y - lr_fit;
+    
+    arma::mat XtWX = ns_basis.t() * inv_Sigma * ns_basis;
+    arma::vec XtWr = ns_basis.t() * inv_Sigma * r;
+    
+    arma::mat Prec = XtWX;
+    
+    if(local){
+      arma::vec prior_prec = 1.0 / arma::square(gamma * lambda_k);
+      Prec.diag() += prior_prec;
+    }else{
+      Prec.diag() += (1.0 / (gamma * gamma));
+    }
+    
+    arma::mat Var = arma::inv_sympd(Prec);
+    arma::vec Mean = Var * XtWr;
+    
+    ns_coefficient = arma::vectorise(rmvnorm(1, Mean, Var));
+  }
+  
+  void update_shrinkage(){
+    const arma::uword d = ns_basis.n_cols;
+    if(d == 0) return;
+    
+    if(local){
+      for(arma::uword k = 0; k < d; ++k){
+        double shape = alpha_k + 0.5;
+        double scale = beta_k + 0.5 * std::pow(ns_coefficient[k] / gamma, 2.0);
+        lambda_k[k] = std::sqrt(rinvgamma(shape, scale));
+      }
+      
+      arma::vec z = ns_coefficient / lambda_k;
+      double shape0 = alpha_0 + 0.5 * (double)d;
+      double scale0 = beta_0  + 0.5 * arma::dot(z, z);
+      gamma = std::sqrt(rinvgamma(shape0, scale0));
+    }else{
+      double shape0 = alpha_0 + 0.5 * (double)d;
+      double scale0 = beta_0  + 0.5 * arma::dot(ns_coefficient, ns_coefficient);
+      gamma = std::sqrt(rinvgamma(shape0, scale0));
+    }
+  }
+  
+protected:
+  double alpha_0 = 1.0;
+  double beta_0  = 1.0;
+  double alpha_k = 1.0;
+  double beta_k  = 1.0;
   
   arma::vec lambda_k;
-  arma::vec vk;
-  
-  bool local;
-  bool binary;
-  
+  bool local = false;
 };
 
-
-
-// // [[Rcpp::export]]
-// List test_NS(NumericVector X, NumericVector X_test, NumericVector y, long K){
-//   NS_R * a = new NS_R(X, y, K, 1);
-//   NumericMatrix theta(6000, K);
-//   NumericMatrix gamma(6000, 1);
-//   //Rcout << a->get_theta() << std::endl;
-//   for(int i = 0; i < 6000; ++i){
-//     a->update(2.0 + NumericVector(y.length()));
-//     //a->update(2.0);
-//     theta(i, _) = a->get_theta();
-//     gamma(i, 0) = a->get_gamma();
-//   }
-//   return List::create(Named("ns_predict") = a->predict(X_test), Named("gamma") = gamma, Named("theta") = theta);
-//   //return List::create(Named("ns_outcome") = wrap(a->ns_outcome), Named("lr_outcome") = wrap(a->lr_outcome), Named("ns_part_outcome") = wrap(a->ns_part_outcome), Named("eta") = a->get_eta(), Named("gamma") = a->get_gamma(), Named("theta") = a->get_theta(), Named("boundary_knots") = a->get_boundary_knots(), Named("knots") = a->get_knots(), Named("internal_knots") = a->get_internal_knots(), Named("ns_part") = a->get_ns_part(), Named("lr_part") = a->get_lr_part(), Named("basis") = a->get_basis());
-// };

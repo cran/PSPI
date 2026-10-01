@@ -3,7 +3,7 @@
 \alias{PSPI}
 \docType{package}
 \title{
-  Propensity Score Predictive Inference for Generalizability
+  Propensity Score Predictive Inference for Generalizability and Transportability
 }
 \description{
   Provides a suite of Propensity Score Predictive Inference (PSPI) methods to generalize treatment effects in trials to target populations. The package includes an existing model Bayesian Causal Forest (BCF) and four PSPI models (BCF-PS, FullBART, SplineBART, DSplineBART). These methods leverage Bayesian Additive Regression Trees (BART) to adjust for high-dimensional covariates and nonlinear associations, while SplineBART and DSplineBART further use propensity score based splines to address covariate shift between trial data and target population. 
@@ -22,22 +22,4 @@ Core computations rely on efficient MCMC routines implemented in C++.
 }
 \references{
   BART3 package: https://github.com/rsparapa/bnptools/tree/master, originally developed by Rodney Sparapani. 
-}
-\examples{
-   sim <- sim_data(scenario = "linear", n_trial = 60)
- 
- fit <- PSPI_generalizability(
-   X = as.matrix(sim$trials[, paste0("X", 1:10)]),
-   Y = sim$trials$Y,
-   A = sim$trials$A,
-   pi = sim$population$ps[sim$population$selected],
-   X_pop = as.matrix(sim$population[, paste0("X", 1:10)]),
-   pi_pop = sim$population$ps,
-   model = "SplineBART",
-   transformation = "InvGumbel",
-   verbose = FALSE,
-   nburn = 1, npost = 1
-)
-   str(fit)
-
 }

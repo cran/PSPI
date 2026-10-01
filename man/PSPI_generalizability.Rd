@@ -2,7 +2,7 @@
 % Please edit documentation in R/MCMC_PSPI_R.R
 \name{PSPI_generalizability}
 \alias{PSPI_generalizability}
-\title{Propensity Scores Predictive Inference for Generalizability}
+\title{Propensity Scores Predictive Inference for Generalizability and Transportability}
 \usage{
 PSPI_generalizability(
   X,
@@ -10,32 +10,45 @@ PSPI_generalizability(
   A,
   pi,
   X_pop,
+  A_pop = NULL,
   pi_pop,
   model,
   transformation = "InvGumbel",
+  restrict_covariates = NULL,
   nburn = 4000,
   npost = 4000,
-  n_knots_main = NULL,
-  n_knots_inter = NULL,
-  order_main = 3,
-  order_inter = 3,
+  n_knots = NULL,
+  order = 3,
   ntrees_s = 200,
+  sparse = FALSE,
+  augment = FALSE,
   verbose = FALSE,
-  seed = NULL
+  seed = NULL,
+  pate_bootstrap = TRUE
 )
 }
 \arguments{
 \item{X}{Matrix of covariates for the trial data.}
 
-\item{Y}{Numeric vector of observed outcomes in the trial.}
+\item{Y}{Numeric vector or logical vector of observed outcomes in the trial.
+Numeric vector is for continuous variable, while logical vector is for binary outcome.}
 
-\item{A}{Binary vector of treatment assignments (0 = control, 1 = intervention).}
+\item{A}{Integer vector of treatment assignments. Values should be
+\code{0, 1, ..., J-1} where \code{0} is the reference (control) arm and
+\code{J} is the total number of treatment arms.}
 
-\item{pi}{Numeric vector of trial propensity scores (probability of trial participation).}
+\item{pi}{Numeric matrix (\eqn{n \times J}) of propensity scores for trial
+participants. Column \eqn{j} contains the propensity score associated with
+arm \eqn{j}. In a standard analysis with a single participation propensity
+score \eqn{\hat\pi = \Pr(S = 1 \mid X)}, the same score can be supplied in
+all columns. The number of columns must equal \code{length(unique(A))}.}
 
 \item{X_pop}{Matrix of covariates for the target population data.}
 
-\item{pi_pop}{Numeric vector of the target population propensity scores.}
+\item{A_pop}{Integer vector of treatment assignments for population data (default = NULL).}
+
+\item{pi_pop}{Numeric matrix (\eqn{N \times J}) of propensity scores for the
+target population. Must have the same number of columns as \code{pi}.}
 
 \item{model}{Character string specifying which PSPI model to use (see Details).}
 
@@ -43,32 +56,62 @@ PSPI_generalizability(
 propensity scores. Options are \code{"Identity"}, \code{"Logit"}, \code{"Cloglog"},
 or \code{"InvGumbel"} (default).}
 
+\item{restrict_covariates}{Restrict population data within support of trial samples.
+This parameter specifies the names of covariates to restrict (default = NULL).}
+
 \item{nburn}{Number of burn-in iterations (default = 4000).}
 
 \item{npost}{Number of posterior iterations saved after burn-in (default = 4000).}
 
-\item{n_knots_main, n_knots_inter}{Number of spline knots for main and interaction effects.
-If \code{NULL}, defaults are chosen automatically.
-\code{n_knots_inter} is available for \code{SplineBART} and \code{DSplineBART};
-\code{n_knots_main} is available only for \code{DSplineBART}.}
+\item{n_knots}{Integer vector specifying the number of spline knots per arm.
+Length \eqn{J - 1} for \code{"SplineBART"} or \eqn{J} for \code{"DSplineBART"}.
+If \code{NULL}, defaults are chosen automatically.}
 
-\item{order_main, order_inter}{Order of spline basis functions (default = 3).
-\code{order_inter} applies to both \code{SplineBART} and \code{DSplineBART};
-\code{order_main} applies only to \code{DSplineBART}.}
+\item{order}{Order of spline basis functions (default = 3).}
 
 \item{ntrees_s}{Number of trees used for the BART component (default = 200).}
+
+\item{sparse}{Whether to perform variable selection based on a sparse Dirichlet prior rather than simply uniform; see Linero 2016.}
+
+\item{augment}{Whether data augmentation is to be performed in sparse variable selection; see Linero 2016.}
 
 \item{verbose}{Logical; if TRUE, prints progress messages.}
 
 \item{seed}{Optional random seed for reproducibility.}
+
+\item{pate_bootstrap}{Logical (default \code{TRUE}). If \code{TRUE},
+after MCMC the function attaches a \code{[npost, J]} matrix
+\code{post_outcome_PATE} containing Bayesian-bootstrap (Dirichlet
+re-weighting) draws of the target-population mean \eqn{E[Y(a)]} for
+each treatment arm. This propagates the uncertainty of the empirical
+covariate distribution \eqn{\widehat{F}_X} into the posterior,
+giving population (PATE) intervals in addition to the standard
+mixed-ATE (MATE) intervals obtained by averaging
+\code{post_outcome[, , j]} uniformly across the target sample
+(Li, Ding & Mealli, 2022). Set \code{FALSE} to skip and save memory.}
 }
 \value{
-A list containing posterior samples and model summaries produced by the C++
-sampler. Typical elements include:
+A list containing posterior samples and model summaries:
 \describe{
-\item{post_outcome1}{Each row is a posterior draw for individual potential outcome under treatment}
-\item{post_outcome0}{Each row is a posterior draw for individual potential outcome under control}
-\item{post_te}{Each row is a posterior draw for individual treatment effects}
+\item{\code{post_outcome}}{A three-dimensional array of dimension
+\code{[npost, N, J]}. Entry \code{[m, i, j]} is the \eqn{m}-th posterior
+draw of the potential outcome for population unit \eqn{i} under treatment
+arm \eqn{j}. Population-level potential outcome means are obtained by
+averaging over units: \code{rowMeans(post_outcome[,,j])}.}
+\item{\code{post_interaction}}{A three-dimensional array of dimension
+\code{[npost, N, J-1]}. Entry \code{[m, i, j]} is the \eqn{m}-th posterior
+draw of the treatment effect for unit \eqn{i} comparing arm \eqn{j} to the
+reference arm (arm 0). The population average treatment effect for arm
+\eqn{j} is \code{rowMeans(post_interaction[,,j])}.}
+\item{\code{post_outcome_train}}{Matrix \code{[npost, n]} of fitted values
+on the trial sample.}
+\item{\code{post_sigma}}{Vector of length \code{npost} containing posterior
+draws of the residual standard deviation.}
+\item{\code{post_beta}}{(SplineBART and DSplineBART only) List of matrices
+containing posterior draws of the natural cubic spline coefficients, one
+matrix per spline component.}
+\item{\code{post_gamma2}}{(SplineBART and DSplineBART only) Matrix of
+posterior draws of the spline shrinkage parameters.}
 }
 }
 \description{
@@ -95,8 +138,16 @@ The \code{model} argument selects the type of PSPI model to be fitted:
 \item \code{"BCF_P"} – BCF with the propensity score as an additional predictor.
 \item \code{"FullBART"} – Uses three BARTs to estimate treatment effects.
 \item \code{"SplineBART"} – Incorporates a natural cubic spline for heterogeneous treatment effects.
-\item \code{"DSplineBART"} – Adds another natural cubic spline for the prognostic score.
+\item \code{"DSplineBART"} (alias \code{"MSplineBART"}) – Adds another natural cubic spline for the prognostic score.
 }
+
+\strong{Multi-arm treatment support}
+
+All models support \eqn{J \ge 2} treatment arms. The model structure is:
+\deqn{Y_i = h(X_i, \hat\pi_{i,0}) + \sum_{j=1}^{J-1} I(A_i = j) \cdot s_j(X_i, \hat\pi_{i,j}) + \epsilon_i}
+where arm 0 is the reference (control) group, \eqn{h(\cdot)} is the prognostic
+function, and each \eqn{s_j(\cdot)} captures the heterogeneous treatment effect
+for arm \eqn{j} relative to the reference.
 
 \strong{Propensity score transformations}
 
@@ -139,17 +190,18 @@ https://github.com/rsparapa/bnptools/tree/master/BART3
 }
 \examples{
 # Example with simulated data
-sim <- sim_data(scenario = "linear", n_trial = 60)
+sim <- sim_trans(scenario = "linear", n_trial = 60)
 
 fit <- PSPI_generalizability(
   X = as.matrix(sim$trials[, paste0("X", 1:10)]),
   Y = sim$trials$Y,
   A = sim$trials$A,
-  pi = sim$population$ps[sim$population$selected],
+  pi = cbind(sim$trials$ps_trial, sim$trials$ps_trial),
   X_pop = as.matrix(sim$population[, paste0("X", 1:10)]),
-  pi_pop = sim$population$ps,
+  pi_pop = cbind(sim$population$ps_target, sim$population$ps_target),
   model = "SplineBART",
   transformation = "InvGumbel",
+  #restrict_covariates = c("X1", "X2"),
   verbose = FALSE,
   nburn = 1, npost = 1
 )

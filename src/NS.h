@@ -21,323 +21,280 @@
 #endif
 
 #include <algorithm>
+#include <memory>
 
 using namespace Rcpp;
 using namespace arma;
 
-
-
 class NS{
 public:
-  NS(){};
+  NS() {}
   
-  NS(NumericVector X, NumericVector y, long K, double sigma, int order = 3){
-    this->X = X;
-    this->y = as<arma::vec>(y);
-    this->K = K;
-    this->n = X.length();
-    this->sigma = sigma;
+  NS(NumericVector X_,
+     NumericVector y_,
+     long K_,
+     double sigma_,
+     int order = 3,
+     bool intercept = false){
+    if(K_ < 2) stop("K must be >= 2.");
     
-    basis = new NS_basis(X, K, order);
+    X = X_;
+    y = as<arma::vec>(y_);
+    K = K_;
+    n = X.size();
+    sigma = sigma_;
+    
+    basis = std::unique_ptr<NS_basis>(new NS_basis(X, K, order, intercept));
+    has_intercept = intercept;
+    
     complete_basis = as<arma::mat>(basis->get_basis());
-    if(K > 2)
-      ns_basis = as<arma::mat>(basis->get_ns_part());
-    lr_basis = complete_basis.cols(0, 1);
-    arma::vec theta_init = update_beta_mean(complete_basis, this->y);
+    partition_basis(complete_basis, lr_basis, ns_basis);
     
-    lr_coefficient = theta_init.subvec(0, 1);
-    
-    if(K > 2){
-      ns_coefficient = theta_init.subvec(2, K - 1);
+    arma::vec theta_init = update_beta_mean(complete_basis, y);
+    lr_coefficient = theta_init.head(lr_basis.n_cols);
+    if(ns_basis.n_cols > 0){
+      ns_coefficient = theta_init.tail(ns_basis.n_cols);
+    }else{
+      ns_coefficient.reset();
     }
-  };
+    
+    update_outcome();
+  }
+  
+  virtual ~NS() = default;
+  
+  NS(const NS&) = delete;
+  NS& operator=(const NS&) = delete;
   
   virtual void update() = 0;
-  virtual void update(double sigma)= 0;
-  virtual void update(NumericVector sigma)= 0;
+  virtual void update(double sigma) = 0;
+  virtual void update(NumericVector sigma) = 0;
   
-  void set_Y(NumericVector y){
-    this->y = as<arma::vec>(y);
+  void set_Y(NumericVector y_){
+    y = as<arma::vec>(y_);
+  }
+  
+  void set_X(NumericVector X_){
+    X = X_;
+    complete_basis = as<arma::mat>(basis->predict(X));
+    partition_basis(complete_basis, lr_basis, ns_basis);
+    update_outcome();
+  }
+  
+  void set_basis(NumericMatrix complete_basis_, NumericMatrix lr_basis_, NumericMatrix ns_basis_){
+    complete_basis = as<arma::mat>(complete_basis_);
+    lr_basis = as<arma::mat>(lr_basis_);
+    ns_basis = as<arma::mat>(ns_basis_);
+    update_outcome();
+  }
+  
+  void set_basis_replace(NumericVector x){
+    complete_basis = as<arma::mat>(basis->predict(x));
+    partition_basis(complete_basis, lr_basis, ns_basis);
+    update_outcome();
   }
   
   NumericVector predict(NumericVector X_test){
     complete_basis_test = as<arma::mat>(basis->predict(X_test));
-    if(K > 2)
-      ns_basis_test = complete_basis_test.cols(2, K-1);
-    lr_basis_test = complete_basis_test.cols(0, 1);
-    arma::vec ns_outcome_test = lr_basis_test * lr_coefficient;
-    if(K > 2)  
-      ns_outcome_test = ns_outcome_test + ns_basis_test * ns_coefficient;
-    return wrap(ns_outcome_test);
-  }
-  
-  NumericMatrix get_basis(){
-    return wrap(complete_basis);
-  }
-  
-  NumericMatrix get_basis_test(){
-    return wrap(complete_basis_test);
-  }
-  
-  NumericMatrix get_ns_part(){
-    return wrap(ns_basis);
-  }
-  
-  NumericMatrix get_lr_part(){
-    return wrap(lr_basis);
-  }
-  
-  NumericVector get_boundary_knots(){
-    return basis->get_boundary_knots();
-  }
-  
-  NumericVector get_internal_knots(){
-    return basis->get_internal_knots();
-  }
-  
-  NumericVector get_knots(){
-    return basis->get_knots();
-  }
-  
-  NumericVector get_theta(){
-    return wrap(arma::join_cols(lr_coefficient, ns_coefficient));
-  }
-  
-  NumericVector get_ns_outcome(){
-    return wrap(ns_outcome);
-  }
-  
-  double get_gamma(){
-    return gamma;
-  }
-  
-  arma::mat inv_X_T_X(arma::mat mat_X){
-    return(arma::inv_sympd(mat_X.t() * mat_X));
-  }
-  
-  arma::vec update_beta_mean(arma::mat mat_X, arma::vec mat_Y){
-    return(inv_X_T_X(mat_X) * mat_X.t() * mat_Y);
-  }
-  
-  arma::vec update_beta(arma::mat mat_X, arma::vec mat_Y, double sigma){
+    partition_basis(complete_basis_test, lr_basis_test, ns_basis_test);
     
-    vec beta_mean = update_beta_mean(mat_X, mat_Y);
-    mat beta_var = inv_X_T_X(mat_X) * sigma * sigma;
-    //Rcout << inv_X_T_X(mat_X)<< std::endl;
-    //Rcout << sigma << std::endl;
-    return arma::vectorise(rmvnorm(1, beta_mean, beta_var));
+    arma::vec out = lr_basis_test * lr_coefficient;
+    if(ns_basis_test.n_cols > 0 && ns_coefficient.n_elem > 0){
+      out += ns_basis_test * ns_coefficient;
+    }
+    return wrap(out);
   }
   
-  arma::vec update_beta(arma::mat mat_X, arma::vec mat_Y, arma::vec sigma) {
-    this->Sigma = arma::diagmat(sigma % sigma);
-    //Rcout<<this->Sigma<<std::endl;
-    // Form the diagonal weight matrix.
-    
-    inv_Sigma = arma::inv_sympd(Sigma);
-    
-    // Compute the weighted cross-product matrix.
-    arma::mat XtWX = mat_X.t() * inv_Sigma * mat_X;
-    
-    // The posterior variance for beta.
-    arma::mat beta_var = arma::inv_sympd(XtWX);
-    
-    // The posterior mean for beta (weighted least squares estimate).
-    arma::vec beta_mean = beta_var * (mat_X.t() * inv_Sigma * mat_Y);
-    
-    // Sample from the multivariate normal with mean beta_mean and covariance beta_var.
-    return arma::vectorise(rmvnorm(1, beta_mean, beta_var));
+  NumericMatrix get_basis() const { return wrap(complete_basis); }
+  
+  NumericMatrix get_basis_test() const { return wrap(complete_basis_test); }
+  
+  NumericMatrix get_lr_part() const { return wrap(lr_basis); }
+  
+  NumericMatrix get_ns_part() const { return wrap(ns_basis); }
+  
+  NumericVector get_boundary_knots() const { return basis->get_boundary_knots(); }
+  
+  NumericVector get_internal_knots() const { return basis->get_internal_knots(); }
+  
+  NumericVector get_knots() const { return basis->get_knots(); }
+  
+  NumericVector get_theta() const{
+    arma::vec theta = lr_coefficient;
+    if(ns_coefficient.n_elem > 0) theta = arma::join_cols(theta, ns_coefficient);
+    return wrap(theta);
   }
   
-  // arma::vec update_beta(arma::mat mat_X, arma::vec mat_Y, arma::mat Sigma) {
-  //   this->Sigma = Sigma;
-  //   
-  //   // Form the diagonal weight matrix.
-  //   arma::mat W = arma::inv_sympd(this->Sigma);
-  //   
-  //   // Compute the weighted cross-product matrix.
-  //   arma::mat XtWX = mat_X.t() * W * mat_X;
-  //   
-  //   // The posterior variance for beta.
-  //   arma::mat beta_var = arma::inv(XtWX);
-  //   
-  //   // The posterior mean for beta (weighted least squares estimate).
-  //   arma::vec beta_mean = beta_var * (mat_X.t() * W * mat_Y);
-  //   
-  //   // Sample from the multivariate normal with mean beta_mean and covariance beta_var.
-  //   return arma::vectorise(rmvnorm(1, beta_mean, beta_var));
-  // }
+  NumericVector get_ns_outcome() const { return wrap(ns_outcome); }
   
+  double get_gamma() const { return gamma; }
   
-  List project_residual_basis(NumericVector y) {
-    arma::vec y_tr = as<arma::vec>(y);   // length n
+  arma::vec update_beta_mean(const arma::mat& Xmat, const arma::vec& Yvec){
+    arma::mat XtX = Xmat.t() * Xmat;
+    arma::vec XtY = Xmat.t() * Yvec;
     
-    if (complete_basis.n_rows != y_tr.n_rows)
-      stop("complete_basis rows must match length(y).");
-    if (complete_basis.n_cols < 2)
-      stop("complete_basis must have at least 2 columns (intercept + basis).");
-    
-    const arma::uword p = complete_basis.n_cols;
-    
-    // Drop intercept; keep linear u and nonlinear spline columns
-    arma::mat Htr_no_ic = complete_basis.cols(0, p - 1); // n x (P-1)
-    //arma::mat Htr_no_ic = complete_basis.cols(0, 0);
-    
-    // Normal equations
-    arma::mat XtX = Htr_no_ic.t() * Htr_no_ic;           // (P-1) x (P-1)
-    arma::vec XtY = Htr_no_ic.t() * y_tr;                // (P-1)
-    
-    // Solve for beta with fallback to pinv if needed
     arma::vec beta;
     bool ok = arma::solve(beta, XtX, XtY,
                           arma::solve_opts::likely_sympd + arma::solve_opts::refine);
-    if (!ok) beta = arma::pinv(XtX) * XtY;
-    
-    // Fitted values and residuals on the trial
-    arma::vec fitted_tr = Htr_no_ic * beta;              // length n
-    arma::vec resid_tr  = y_tr - fitted_tr;              // length n
-    
-    return List::create(
-      _["beta"]       = beta,        // length P-1
-      _["p"]          = static_cast<int>(p),
-      _["fitted_tr"]  = fitted_tr,
-      _["resid_tr"]   = wrap(resid_tr)
-    );
+    if(!ok) beta = arma::pinv(XtX) * XtY;
+    return beta;
   }
   
+  arma::vec update_beta(const arma::mat& Xmat, const arma::vec& Yvec, double sigma_){
+    arma::vec beta_mean = update_beta_mean(Xmat, Yvec);
+    
+    arma::mat XtX = Xmat.t() * Xmat;
+    arma::mat XtX_inv;
+    bool ok = arma::inv_sympd(XtX_inv, XtX);
+    if(!ok) XtX_inv = arma::pinv(XtX);
+    
+    arma::mat beta_var = XtX_inv * (sigma_ * sigma_);
+    return arma::vectorise(rmvnorm(1, beta_mean, beta_var));
+  }
   
+  arma::vec update_beta(const arma::mat& Xmat, const arma::vec& Yvec, const arma::vec& sigma_vec){
+    if(sigma_vec.n_elem != Yvec.n_elem) stop("sigma length must match y length.");
+    
+    arma::vec w = 1.0 / (sigma_vec % sigma_vec);
+    arma::mat W = arma::diagmat(w);
+    
+    arma::mat XtWX = Xmat.t() * W * Xmat;
+    
+    arma::mat beta_var;
+    bool ok = arma::inv_sympd(beta_var, XtWX);
+    if(!ok) beta_var = arma::pinv(XtWX);
+    
+    arma::vec beta_mean = beta_var * (Xmat.t() * W * Yvec);
+    return arma::vectorise(rmvnorm(1, beta_mean, beta_var));
+  }
   
-  List project_residual_basis_test(NumericVector y) {
-    arma::vec y_tr = as<arma::vec>(y);   // length n
+  List project_residual_basis(NumericVector y_in){
+    arma::vec y_tr = as<arma::vec>(y_in);
+    if(complete_basis.n_rows != y_tr.n_rows) stop("complete_basis rows must match length(y).");
     
-    if ( complete_basis_test.n_rows != y_tr.n_rows)
-      stop("complete_basis rows must match length(y).");
-    if ( complete_basis_test.n_cols < 2)
-      stop("complete_basis must have at least 2 columns (intercept + basis).");
+    arma::mat H = design_no_intercept(complete_basis);
+    if(H.n_cols == 0) stop("No columns available after dropping intercept.");
     
-    const arma::uword p = complete_basis_test.n_cols;
+    arma::mat XtX = H.t() * H;
+    arma::vec XtY = H.t() * y_tr;
     
-    // Drop intercept; keep linear u and nonlinear spline columns
-    arma::mat Htr_no_ic = complete_basis_test.cols(0, p - 1); // n x (P-1)
-    //arma::mat Htr_no_ic = complete_basis_test.cols(0, 0);
-    
-    // Normal equations
-    arma::mat XtX = Htr_no_ic.t() * Htr_no_ic;           // (P-1) x (P-1)
-    arma::vec XtY = Htr_no_ic.t() * y_tr;                // (P-1)
-    
-    // Solve for beta with fallback to pinv if needed
     arma::vec beta;
     bool ok = arma::solve(beta, XtX, XtY,
                           arma::solve_opts::likely_sympd + arma::solve_opts::refine);
-    if (!ok) beta = arma::pinv(XtX) * XtY;
+    if(!ok) beta = arma::pinv(XtX) * XtY;
     
-    // Fitted values and residuals on the trial
-    arma::vec fitted_tr = Htr_no_ic * beta;              // length n
-    arma::vec resid_tr  = y_tr - fitted_tr;              // length n
+    arma::vec fitted = H * beta;
+    arma::vec resid = y_tr - fitted;
     
     return List::create(
-      _["beta"]       = beta,        // length P-1
-      _["p"]          = static_cast<int>(p),
-      _["fitted_tr"]  = fitted_tr,
-      _["resid_tr"]   = wrap(resid_tr)
+      _["beta"] = beta,
+      _["d_used"] = (int)H.n_cols,
+      _["resid_tr"] = wrap(resid)
     );
   }
   
+  List project_residual_basis_test(NumericVector y_in){
+    arma::vec y_tr = as<arma::vec>(y_in);
+    if(complete_basis_test.n_rows != y_tr.n_rows) stop("complete_basis_test rows must match length(y).");
+    
+    arma::mat H = design_no_intercept(complete_basis_test);
+    if(H.n_cols == 0) stop("No columns available after dropping intercept.");
+    
+    arma::mat XtX = H.t() * H;
+    arma::vec XtY = H.t() * y_tr;
+    
+    arma::vec beta;
+    bool ok = arma::solve(beta, XtX, XtY,
+                          arma::solve_opts::likely_sympd + arma::solve_opts::refine);
+    if(!ok) beta = arma::pinv(XtX) * XtY;
+    
+    arma::vec fitted = H * beta;
+    arma::vec resid = y_tr - fitted;
+    
+    return List::create(
+      _["beta"] = beta,
+      _["d_used"] = (int)H.n_cols,
+      _["resid_tr"] = wrap(resid)
+    );
+  }
   
-  
-  
-  NumericVector predict_project_residual_basis(List project,
-                                               NumericVector y_pop) {
-    // Extract learned beta and training column count p
+  NumericVector predict_project_residual_basis(List project, NumericVector y_pop){
     arma::vec beta = as<arma::vec>(project["beta"]);
-    int p_tr = project.containsElementNamed("p")
-      ? as<int>(project["p"])
-        : static_cast<int>(beta.n_rows + 1);
+    int d_used = as<int>(project["d_used"]);
     
     arma::vec y_te = as<arma::vec>(y_pop);
-    arma::mat B_te = complete_basis_test;
+    if(complete_basis_test.n_rows != y_te.n_rows) stop("complete_basis_test rows must match length(y_pop).");
     
-    if (B_te.n_cols != static_cast<arma::uword>(p_tr))
-      stop("complete_basis_test must have the same number of columns as complete_basis used in training.");
-    if (B_te.n_rows != y_te.n_rows)
-      stop("complete_basis_test rows must match length(y_pop).");
+    arma::mat H = design_no_intercept(complete_basis_test);
+    if((int)H.n_cols != d_used) stop("Basis column count mismatch for projection.");
     
-    // Drop intercept; apply the same coefficient vector
-    arma::mat Hte_no_ic = B_te.cols(0, p_tr - 1);        // N x (P-1)
-    
-    arma::vec fitted_te = Hte_no_ic * beta;              // length N
-    arma::vec resid_te  = y_te - fitted_te;              // length N
-    
-    return wrap(resid_te);
+    arma::vec fitted = H * beta;
+    arma::vec resid = y_te - fitted;
+    return wrap(resid);
   }
   
-  
-  
-  
-  double update_slope(const arma::vec& u,
-                      const arma::vec& y,
-                      double sigma) {
-    double w = 1.0 / (sigma * sigma);          // scalar weight
+  double update_slope(const arma::vec& u, const arma::vec& yvec, double sigma_){
+    double w = 1.0 / (sigma_ * sigma_);
     double XtWX = w * arma::dot(u, u);
     double beta_var = 1.0 / XtWX;
-    double beta_mean = beta_var * w * arma::dot(u, y);
-    
-    double z = R::rnorm(0.0, 1.0);
-    return beta_mean + std::sqrt(beta_var) * z;
+    double beta_mean = beta_var * w * arma::dot(u, yvec);
+    return beta_mean + std::sqrt(beta_var) * R::rnorm(0.0, 1.0);
   }
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
   void update_outcome(){
-    lr_outcome = lr_basis * lr_coefficient;
-    ns_outcome = lr_outcome;
-    if(K > 2){
-      ns_part_outcome = ns_basis * ns_coefficient;
-      ns_outcome = ns_outcome + ns_part_outcome;
+    ns_outcome = lr_basis * lr_coefficient;
+    if(ns_basis.n_cols > 0 && ns_coefficient.n_elem > 0){
+      ns_outcome += ns_basis * ns_coefficient;
     }
-    //Rcout << ns_outcome << std::endl;
   }
   
   double rinvgamma(double a, double b){
-    double s = R::rgamma(a, 1 / b);
-    return 1 / s;
+    double s = R::rgamma(a, 1.0 / b);
+    return 1.0 / s;
   }
   
-  double qinvgamma(double p, double a, double b) {
-    // R::qgamma returns the quantile for the Gamma distribution with given shape and scale.
+  double qinvgamma(double p, double a, double b){
     double q = R::qgamma(1.0 - p, a, 1.0 / b, true, false);
     return 1.0 / q;
   }
   
+protected:
+  void partition_basis(const arma::mat& B, arma::mat& B_lr, arma::mat& B_ns){
+    if(B.n_cols == 0) stop("Basis matrix has zero columns.");
+    
+    arma::uword lr_cols = has_intercept ? 2u : 1u;
+    if(B.n_cols < lr_cols) stop("Basis has fewer columns than required for linear part.");
+    
+    B_lr = B.cols(0, lr_cols - 1);
+    
+    if(B.n_cols > lr_cols){
+      B_ns = B.cols(lr_cols, B.n_cols - 1);
+    }else{
+      B_ns.set_size(B.n_rows, 0);
+    }
+  }
+  
+  arma::mat design_no_intercept(const arma::mat& B) const{
+    if(!has_intercept) return B;
+    if(B.n_cols <= 1) stop("Cannot drop intercept: basis has <= 1 column.");
+    return B.cols(1, B.n_cols - 1);
+  }
   
 protected:
-  NS_basis * basis;
+  std::unique_ptr<NS_basis> basis;
   
-  long K;
-  long n;
-  double sigma;
-  double gamma;
+  bool has_intercept = false;
+  
+  long K = 0;
+  long n = 0;
+  double sigma = 1.0;
+  double gamma = NA_REAL;
   
   arma::mat Sigma;
   arma::mat inv_Sigma;
   
   arma::vec lr_coefficient;
   arma::vec ns_coefficient;
-  
   
   NumericVector X;
   arma::vec y;
@@ -351,11 +308,7 @@ protected:
   arma::mat lr_basis_test;
   
   arma::vec ns_outcome;
-  arma::vec lr_outcome;
-  arma::vec ns_part_outcome;
-  
 };
-
 
 
 // 
